@@ -33,7 +33,14 @@ import {
   setPendingHandoff,
 } from '../src/storage/pending-handoff-store';
 import { fromWireBytes, toWireBytes } from '../src/utils/wire-bytes';
-import { isUrlOnHostPatterns, MEDIA_MAX_BYTES } from '../src/utils/media-fetch';
+import {
+  hostOfPattern,
+  hostPatternFor,
+  isPageFetchAllowed,
+  isUrlOnHostPatterns,
+  MEDIA_MAX_BYTES,
+} from '../src/utils/media-fetch';
+import { pageFetchMedia, type PageFetchResult } from '../src/utils/page-fetch-main-world';
 import {
   installResourceCardProbeHooks,
   mainWorldProbeArgsList,
@@ -140,16 +147,74 @@ function hostPatterns(): string[] {
 
 /**
  * Media bytes for a URL a chat page shows, when the content script cannot read them itself
- * (cross-origin without CORS). Only for supported chat tabs, only GET, only https URLs on this
- * extension's host permissions (after redirects too), and never more than MEDIA_MAX_BYTES.
+ * (cross-origin without CORS). Only for supported chat tabs, only GET, never more than
+ * MEDIA_MAX_BYTES.
+ *
+ * 1. The extension itself, for https URLs on its host permissions (after redirects too).
+ * 2. Otherwise the asking frame's own fetch() in the page's MAIN world, for URLs
+ *    isPageFetchAllowed accepts. Firefox keeps Gemini's Google session out of the extension's
+ *    requests; the page has it, and its reads stay under the page's CORS rules.
  */
 async function handleFetchMedia(msg: FetchMediaMessage, sender: SenderLike): Promise<FetchMediaResponse> {
-  const fromChatTab = sender.tab?.id !== undefined && !!platformForUrl(sender.url);
-  if (!fromChatTab) return { ok: false, error: 'not_from_chat_tab' };
+  const tabId = sender.tab?.id;
+  const pageUrl = sender.url;
+  if (tabId === undefined || !pageUrl || !platformForUrl(pageUrl)) return { ok: false, error: 'not_from_chat_tab' };
+  if (typeof msg.url !== 'string') return { ok: false, error: 'host_not_allowed' };
   const patterns = hostPatterns();
-  if (typeof msg.url !== 'string' || !isUrlOnHostPatterns(msg.url, patterns)) return { ok: false, error: 'host_not_allowed' };
 
-  const response = await fetch(msg.url, { credentials: 'include', cache: 'no-store', redirect: 'follow' });
+  let failure: FetchMediaResponse = { ok: false, error: 'host_not_allowed' };
+  const pattern = hostPatternFor(msg.url, patterns);
+  if (pattern) {
+    if (!(await hasHostPermission(pattern))) {
+      // Firefox MV3 host permissions are opt-in: declared in the manifest is not yet granted.
+      // Without it the request below would only fail CORS; the popup offers to allow it.
+      failure = { ok: false, error: `no permission for ${hostOfPattern(pattern)}` };
+    } else {
+      try {
+        const own = await fetchMediaAsExtension(msg.url, patterns);
+        if (own.ok || own.error === 'too_large') return own;
+        failure = own;
+      } catch (err) {
+        failure = { ok: false, error: `${errorText(err)}${await redirectNote(msg.url)}` };
+      }
+    }
+  }
+
+  if (!isPageFetchAllowed(msg.url, pageUrl, patterns)) return failure;
+  const viaPage = await fetchMediaThroughPage(
+    msg.url,
+    { tabId, frameId: sender.frameId ?? 0, pageUrl },
+    patterns,
+    msg.picture === true
+  );
+  if (viaPage.ok || viaPage.error === 'too_large') return viaPage;
+  return { ok: false, status: viaPage.status ?? failure.status, error: `${failure.error}; page: ${viaPage.error}` };
+}
+
+async function hasHostPermission(pattern: string): Promise<boolean> {
+  try {
+    return await browser.permissions.contains({ origins: [pattern] });
+  } catch {
+    // Unknown: let the request itself decide.
+    return true;
+  }
+}
+
+/**
+ * After a failed request: does the first answer redirect? Then the file sits on a host this
+ * extension may not read (or has not been allowed to), which the error should say.
+ */
+async function redirectNote(url: string): Promise<string> {
+  try {
+    const probe = await fetch(url, { credentials: 'include', cache: 'no-store', redirect: 'manual' });
+    return probe.type === 'opaqueredirect' ? ' (redirects to another host)' : '';
+  } catch {
+    return '';
+  }
+}
+
+async function fetchMediaAsExtension(url: string, patterns: string[]): Promise<FetchMediaResponse> {
+  const response = await fetch(url, { credentials: 'include', cache: 'no-store', redirect: 'follow' });
   if (response.url && !isUrlOnHostPatterns(response.url, patterns)) return { ok: false, error: 'host_not_allowed' };
   if (!response.ok) return { ok: false, status: response.status, error: 'http_error' };
   const declared = Number(response.headers.get('content-length'));
@@ -157,6 +222,47 @@ async function handleFetchMedia(msg: FetchMediaMessage, sender: SenderLike): Pro
   const bytes = new Uint8Array(await response.arrayBuffer());
   if (bytes.byteLength > MEDIA_MAX_BYTES) return { ok: false, error: 'too_large' };
   return { ok: true, data: toWireBytes(bytes), mimeType: response.headers.get('content-type') || undefined };
+}
+
+/** The asking frame reads `url` with its own session (src/utils/page-fetch-main-world.ts). */
+async function fetchMediaThroughPage(
+  url: string,
+  from: { tabId: number; frameId: number; pageUrl: string },
+  patterns: string[],
+  picture: boolean
+): Promise<FetchMediaResponse> {
+  if (!browser.scripting?.executeScript) return { ok: false, error: 'scripting_api_unavailable' };
+  let result: PageFetchResult | undefined;
+  try {
+    const [injection] = await browser.scripting.executeScript({
+      target: { tabId: from.tabId, frameIds: [from.frameId] },
+      world: 'MAIN',
+      func: pageFetchMedia,
+      args: [url, new URL(from.pageUrl).origin, MEDIA_MAX_BYTES, picture],
+    });
+    // Firefox puts what the injected function threw (a syntax error included) into `error`.
+    const thrown = (injection as { error?: unknown } | undefined)?.error;
+    if (thrown !== undefined && thrown !== null) return { ok: false, error: `page_fetch_failed: ${errorText(thrown)}` };
+    result = injection?.result as PageFetchResult | undefined;
+  } catch (err) {
+    return { ok: false, error: `page_fetch_failed: ${errorText(err)}` };
+  }
+  // The page's answer is only as trusted as the page: check its shape and limits again.
+  if (!result || typeof result !== 'object') return { ok: false, error: 'page_fetch_failed' };
+  if (result.ok !== true || typeof result.base64 !== 'string') {
+    return {
+      ok: false,
+      status: typeof result.status === 'number' ? result.status : undefined,
+      error: typeof result.error === 'string' ? result.error.slice(0, 400) : 'page_fetch_failed',
+    };
+  }
+  // The page followed redirects on its own: the final address must pass the same check.
+  const finalUrl = typeof result.finalUrl === 'string' && result.finalUrl ? result.finalUrl : url;
+  if (!isPageFetchAllowed(finalUrl, from.pageUrl, patterns)) return { ok: false, error: 'host_not_allowed' };
+  // Base64 carries 3 bytes in 4 characters.
+  if (Math.floor((result.base64.length * 3) / 4) > MEDIA_MAX_BYTES + 2) return { ok: false, error: 'too_large' };
+  const mimeType = typeof result.contentType === 'string' && result.contentType ? result.contentType.slice(0, 200) : undefined;
+  return { ok: true, data: { b64: result.base64 }, mimeType };
 }
 
 /** Content script -> tray. Accepts only captures sent from a supported chat tab. */

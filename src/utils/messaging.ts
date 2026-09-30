@@ -222,12 +222,15 @@ export interface ProbeInstallMainWorldMessage extends BaseMessage {
 
 /**
  * Content script -> background: read a picture, video or file the chat page shows but the
- * content script may not fetch itself (cross-origin, no CORS headers). The background only
- * fetches https URLs on the extension's own host permissions.
+ * content script may not fetch itself (cross-origin, no CORS headers). The background fetches
+ * https URLs on the extension's own host permissions itself, and otherwise asks the page to read
+ * the URL with its own fetch() (only URLs isPageFetchAllowed accepts).
  */
 export interface FetchMediaMessage extends BaseMessage {
   type: 'FETCH_MEDIA';
   url: string;
+  /** The URL is a picture: the page may also read its pixels (canvas) when fetch() fails. */
+  picture?: boolean;
 }
 
 export interface FetchMediaResponse {

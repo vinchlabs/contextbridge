@@ -8,7 +8,13 @@ import { ExtractedMediaReference } from './extractor';
 import { CaptureProgress } from '../adapter';
 import { CaptureIncompleteError } from '../../core/errors/errors';
 import { baseMime, isImageMime, sniffImageMime, withImageExtension } from '../../core/model/attachments';
-import { fetchMediaViaBackground, MediaTooLargeError, MEDIA_MAX_BYTES } from '../../utils/media-fetch';
+import {
+  describeMediaSource,
+  fetchMediaViaBackground,
+  MediaReadError,
+  MediaTooLargeError,
+  MEDIA_MAX_BYTES,
+} from '../../utils/media-fetch';
 import { ownBytes } from '../../utils/wire-bytes';
 
 export async function resolveChatGPTMedia(
@@ -23,7 +29,7 @@ export async function resolveChatGPTMedia(
   const urlToShaMap = new Map<string, string>();
   let processed = 0;
   // Every unreadable upload is named at once, so one "Skip missing files" covers them all.
-  const missingUploads: Array<{ name: string; url: string }> = [];
+  const missingUploads: Array<{ name: string; url: string; reason: string }> = [];
 
   for (const ref of mediaRefs) {
     if (signal?.aborted) break;
@@ -42,7 +48,9 @@ export async function resolveChatGPTMedia(
         currentOperation: `Resolving media item ${processed + 1} of ${mediaRefs.length}...`,
       });
 
-      const { data, mimeType } = await fetchMediaBinary(url);
+      // Pictures carry no type or an image type; videos, audio and files carry theirs.
+      const picture = !ref.mimeType || isImageMime(ref.mimeType);
+      const { data, mimeType } = await fetchMediaBinary(url, { picture });
       const { mimeType: finalMime, filename } = describeFetchedMedia(data, mimeType, ref);
       const meta = await blobStore.put(data, {
         mimeType: finalMime,
@@ -68,7 +76,11 @@ export async function resolveChatGPTMedia(
           });
           urlToShaMap.set(url, meta.sha256);
         } else if (!allowMissingUserUploads) {
-          missingUploads.push({ name: ref.filename || 'an uploaded image', url });
+          missingUploads.push({
+            name: ref.filename || ref.altText?.slice(0, 80) || 'an uploaded image',
+            url,
+            reason: `${describeMediaSource(url)} | ${err instanceof MediaReadError ? err.message : errorLine(err, 300)}`,
+          });
         }
       } else {
         // Non-user uploads (e.g. system or assistant assets): preserve fallback if provided
@@ -94,8 +106,10 @@ export async function resolveChatGPTMedia(
 
   if (missingUploads.length > 0 && !signal?.aborted) {
     const first = missingUploads[0]!;
+    // How each read failed (origins only, no paths or tokens), for the technical message.
+    const reasons = missingUploads.map((m) => `[${m.name}: ${m.reason}]`).join(' ');
     throw new CaptureIncompleteError(
-      `Failed to capture user upload file bytes for ${missingUploads.map((m) => m.name).join(', ')}`,
+      `Failed to capture user upload file bytes for ${missingUploads.map((m) => m.name).join(', ')} ${reasons}`,
       {
         terminationReason: 'unresolved_user_attachment',
         failedUrl: first.url,
@@ -156,10 +170,13 @@ export function describeFetchedMedia(
 }
 
 /**
- * Fetches binary data from standard HTTP URLs, blob: URLs, or data: URLs.
+ * Fetches binary data from standard HTTP URLs, blob: URLs, or data: URLs. When every way fails,
+ * throws a MediaReadError whose trail says how each one failed.
+ * `picture`: the URL is a picture, so its pixels are an acceptable last resort.
  */
 export async function fetchMediaBinary(
-  url: string
+  url: string,
+  opts: { picture?: boolean } = {}
 ): Promise<{ data: Uint8Array; mimeType: string }> {
   // 1. Handle synthetic ChatGPT internal file references (skip network fetch)
   if (url.startsWith('chatgpt-file://')) {
@@ -198,7 +215,7 @@ export async function fetchMediaBinary(
   }
 
   // 4. HTTP / HTTPS / blob: URLs, directly from the content script.
-  let directError: unknown;
+  const trail: string[] = [];
   try {
     // Session cookies only for the page's own origin: a credentialed cross-origin request fails
     // CORS against CDNs that answer `Access-Control-Allow-Origin: *` (signed URLs need no cookies).
@@ -226,54 +243,93 @@ export async function fetchMediaBinary(
         mimeType,
       };
     }
-    directError = new Error(`HTTP ${response.status} for ${url}`);
+    trail.push(`direct: HTTP ${response.status}`);
   } catch (fetchErr) {
     if (fetchErr instanceof MediaTooLargeError) throw fetchErr;
-    directError = fetchErr;
+    trail.push(`direct: ${errorLine(fetchErr)}`);
   }
 
-  // 5. Cross-origin media without CORS headers (googleusercontent.com, oaiusercontent.com):
-  //    the background may read it, on the extension's host permissions only.
-  if (/^https:/i.test(url)) {
+  // A picture from the page's own blob: URL is same-origin, so its pixels are readable here
+  // (Firefox lets neither this script nor, under Gemini's CSP, the page fetch that URL).
+  const ownBlobPicture = url.startsWith('blob:') && opts.picture === true;
+  if (ownBlobPicture) {
+    const shown = readShownPicture(url, trail);
+    if (shown) return shown;
+  }
+
+  // 5. Cross-origin media without CORS headers (googleusercontent.com, oaiusercontent.com) and
+  //    the page's own blob: URLs: the background reads them on the extension's host permissions,
+  //    or through the page itself (Gemini's pictures need the page's Google session, and only
+  //    the page may read its blob: URLs).
+  if (/^(https:|blob:)/i.test(url)) {
     try {
-      const viaBackground = await fetchMediaViaBackground(url);
+      const viaBackground = await fetchMediaViaBackground(url, opts.picture === true);
       if (viaBackground) return viaBackground;
+      trail.push('background: no extension runtime');
     } catch (bgErr) {
       if (bgErr instanceof MediaTooLargeError) throw bgErr;
-      // fall through to the rendered copy
+      trail.push(`background: ${errorLine(bgErr, 500)}`);
     }
   }
 
-  // 6. A picture the page has already drawn: read it back through a canvas (fails when the
-  //    canvas is tainted by a cross-origin image).
-  if (typeof document !== 'undefined') {
-    const imgEl = Array.from(document.images || []).find(
-      (img) => img.currentSrc === url || img.getAttribute('src') === url
-    ) as HTMLImageElement | undefined;
-    if (imgEl && imgEl.complete && imgEl.naturalWidth > 0) {
-      try {
-        const canvas = document.createElement('canvas');
-        canvas.width = imgEl.naturalWidth;
-        canvas.height = imgEl.naturalHeight;
-        const ctx = canvas.getContext('2d');
-        if (ctx) {
-          ctx.drawImage(imgEl, 0, 0);
-          const dataUrl = canvas.toDataURL('image/png');
-          const comma = dataUrl.indexOf(',');
-          if (comma !== -1) {
-            const bin = atob(dataUrl.slice(comma + 1));
-            const bytes = new Uint8Array(bin.length);
-            for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-            return { data: bytes, mimeType: 'image/png' };
-          }
-        }
-      } catch {
-        // Canvas tainted or not allowed
+  // 6. A picture the page has already drawn, read back through a canvas (fails when a
+  //    cross-origin picture taints the canvas).
+  if (!ownBlobPicture) {
+    const shown = readShownPicture(url, trail);
+    if (shown) return shown;
+  }
+
+  throw new MediaReadError(trail);
+}
+
+/** The pixels of a picture the page shows at `url`, as PNG; null (and a trail entry) otherwise. */
+function readShownPicture(url: string, trail: string[]): { data: Uint8Array; mimeType: string } | null {
+  if (typeof document === 'undefined') return null;
+  const imgEl = Array.from(document.querySelectorAll('img')).find(
+    (img) => img.currentSrc === url || img.getAttribute('src') === url
+  );
+  if (!imgEl) {
+    trail.push('canvas: picture not on the page');
+    return null;
+  }
+  if (!imgEl.complete || imgEl.naturalWidth === 0) {
+    trail.push('canvas: picture not loaded');
+    return null;
+  }
+  try {
+    const canvas = document.createElement('canvas');
+    canvas.width = imgEl.naturalWidth;
+    canvas.height = imgEl.naturalHeight;
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+      ctx.drawImage(imgEl, 0, 0);
+      const dataUrl = canvas.toDataURL('image/png');
+      const comma = dataUrl.indexOf(',');
+      if (comma !== -1) {
+        const bin = atob(dataUrl.slice(comma + 1));
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        if (bytes.length > MEDIA_MAX_BYTES) throw new MediaTooLargeError(bytes.length);
+        if (bytes.length > 0) return { data: bytes, mimeType: 'image/png' };
       }
     }
+    trail.push('canvas: no image data');
+  } catch (canvasErr) {
+    if (canvasErr instanceof MediaTooLargeError) throw canvasErr;
+    // Tainted by a cross-origin picture, or not allowed.
+    trail.push(`canvas: ${errorLine(canvasErr)}`);
   }
+  return null;
+}
 
-  throw directError instanceof Error ? directError : new Error(`Failed to fetch media binary from ${url}`);
+/** One line for an error: name and message, addresses cut to their origin, at most `max` long. */
+function errorLine(err: unknown, max = 160): string {
+  const e = err as { name?: unknown; message?: unknown } | null;
+  const name = typeof e?.name === 'string' && e.name !== 'Error' ? `${e.name}: ` : '';
+  return `${name}${String(e?.message ?? err)}`
+    .replace(/\b(?:blob:)?https?:\/\/[^\s"'<>]+/gi, (address) => describeMediaSource(address))
+    .replace(/\s+/g, ' ')
+    .slice(0, max);
 }
 
 export function inferMimeFromUrl(url: string): string {

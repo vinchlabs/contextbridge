@@ -49,6 +49,7 @@ Then load it in Firefox:
 1. Open `about:debugging#/runtime/this-firefox`.
 2. Click **Load Temporary Add-on...** and choose `.output/firefox-mv3/manifest.json`.
 3. The ContextBridge button appears in the toolbar. Temporary add-ons are removed when Firefox restarts.
+4. Firefox grants site access one site at a time. When the popup says so, press **Allow on ...** for the chat site and **Allow pictures** for the servers its pictures come from (Gemini: `*.googleusercontent.com`, `lh3.google.com`). Without the second one, Gemini pictures cannot be copied.
 
 ## Use it
 

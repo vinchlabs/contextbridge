@@ -33,6 +33,7 @@ import type {
 import { describeFiles } from '../../src/utils/attach-report';
 import { formatDateForFilename, sanitizeFilename } from '../../src/utils/sanitize';
 import { toWireBytes, type WireBytes } from '../../src/utils/wire-bytes';
+import { hostOfPattern } from '../../src/utils/media-fetch';
 import Diagnostics from './Diagnostics';
 
 /*
@@ -58,6 +59,8 @@ interface ChatTab {
   windowId?: number;
   status: TabStatus;
   platform?: PlatformInfo;
+  /** The platform's picture and file servers Firefox has not allowed yet (host patterns). */
+  missingMedia?: string[];
   title?: string;
   url?: string;
   capture?: CaptureStateInfo;
@@ -188,10 +191,12 @@ async function inspectTab(): Promise<ChatTab> {
   try {
     const res = (await browser.tabs.sendMessage(tab.id, { type: 'GET_PAGE_STATUS' })) as PageStatusResponse | undefined;
     if (res?.type === 'PAGE_STATUS_RESPONSE' && res.isSupported) {
+      const platform = platformInfo(res.platformId) ?? fromUrl;
       return {
         ...base,
         status: 'ready',
-        platform: platformInfo(res.platformId) ?? fromUrl,
+        platform,
+        missingMedia: platform ? await notGranted(platform.mediaOrigins) : [],
         title: res.title || undefined,
         url: res.pageUrl || tab.url,
         capture: res.capture,
@@ -209,6 +214,28 @@ async function inspectTab(): Promise<ChatTab> {
     granted = true;
   }
   return { ...base, status: granted ? 'no-script' : 'no-access', platform: fromUrl };
+}
+
+/**
+ * The host patterns Firefox has not granted. MV3 host permissions are opt-in there: allowing an
+ * extension on a chat site does not allow it on the servers that site's pictures come from.
+ */
+async function notGranted(origins: readonly string[]): Promise<string[]> {
+  const missing: string[] = [];
+  for (const origin of origins) {
+    try {
+      if (!(await browser.permissions.contains({ origins: [origin] }))) missing.push(origin);
+    } catch {
+      // Unknown: treat as granted rather than nag.
+    }
+  }
+  return missing;
+}
+
+/** "googleusercontent.com and lh3.google.com" */
+function hostList(patterns: readonly string[]): string {
+  const hosts = patterns.map(hostOfPattern);
+  return hosts.length <= 1 ? (hosts[0] ?? '') : `${hosts.slice(0, -1).join(', ')} and ${hosts[hosts.length - 1]}`;
 }
 
 async function download(bytes: Uint8Array | WireBytes, filename: string, mimeType: string, saveAs = true): Promise<void> {
@@ -558,15 +585,39 @@ export default function App() {
     if (!tab.platform) return;
     setBusy('access');
     try {
-      const granted = await browser.permissions.request({ origins: tab.platform.origins });
+      // The site and the servers its pictures come from, in one prompt.
+      const origins = [...tab.platform.origins, ...tab.platform.mediaOrigins];
+      const granted = await browser.permissions.request({ origins });
       if (granted) {
-        setTab((t) => ({ ...t, status: 'no-script' }));
+        setTab((t) => ({ ...t, status: 'no-script', missingMedia: [] }));
         setFeedback({ tone: 'ok', title: 'Access allowed', detail: 'Reload the tab to start.' });
       }
     } catch (err) {
       setFeedback({ tone: 'error', title: 'Could not ask for access', detail: errorText(err) });
     } finally {
       setBusy(null);
+    }
+  }
+
+  /** Allows the picture servers; `thenCopy` repeats the copy that failed because of them. */
+  async function grantMediaAccess(thenCopy: boolean) {
+    const origins = tab.missingMedia ?? [];
+    if (origins.length === 0) return;
+    setBusy('access');
+    let granted = false;
+    try {
+      granted = await browser.permissions.request({ origins });
+    } catch (err) {
+      setFeedback({ tone: 'error', title: 'Could not ask for access', detail: errorText(err) });
+    } finally {
+      setBusy(null);
+    }
+    if (!granted) return;
+    setTab((t) => ({ ...t, missingMedia: [] }));
+    if (thenCopy) {
+      await copyThisChat(true);
+    } else {
+      setFeedback({ tone: 'ok', title: 'Pictures allowed', detail: 'Pictures and files are copied with the chat now.' });
     }
   }
 
@@ -710,6 +761,7 @@ export default function App() {
       onCancel={cancelCopy}
       onReload={reloadTab}
       onGrant={grantAccess}
+      onGrantMedia={() => grantMediaAccess(false)}
     />
   );
 
@@ -908,6 +960,8 @@ export default function App() {
             onRetry={() => copyThisChat()}
             onSkipMissing={() => copyThisChat(true, true)}
             onRetryWithoutFiles={() => copyThisChat(false)}
+            mediaHosts={tab.missingMedia}
+            onGrantMedia={() => grantMediaAccess(true)}
             onDiagnostics={openDiagnostics}
             onDismiss={() => setFeedback(null)}
           />
@@ -955,6 +1009,7 @@ interface TabSectionProps {
   onCancel: () => void;
   onReload: () => void;
   onGrant: () => void;
+  onGrantMedia: () => void;
 }
 
 function TabSection(props: TabSectionProps) {
@@ -1010,6 +1065,17 @@ function TabSection(props: TabSectionProps) {
               />
               <span>Include files and images</span>
             </label>
+            {props.includeAttachments && (tab.missingMedia?.length ?? 0) > 0 && (
+              <>
+                <p className="hint">
+                  Firefox has not allowed ContextBridge to read pictures from {hostList(tab.missingMedia ?? [])} yet,
+                  so they cannot be copied.
+                </p>
+                <button type="button" className="btn small" onClick={props.onGrantMedia} disabled={locked}>
+                  Allow pictures
+                </button>
+              </>
+            )}
           </div>
         )}
       </section>
@@ -1130,6 +1196,9 @@ interface FeedbackNoteProps {
   onRetryWithoutFiles: () => void;
   onDiagnostics: () => void;
   onDismiss: () => void;
+  /** Picture servers Firefox has not allowed: offered with unreadable files. */
+  mediaHosts?: string[];
+  onGrantMedia?: () => void;
 }
 
 function FeedbackNote({
@@ -1140,8 +1209,12 @@ function FeedbackNote({
   onRetryWithoutFiles,
   onDiagnostics,
   onDismiss,
+  mediaHosts,
+  onGrantMedia,
 }: FeedbackNoteProps) {
   const missing = feedback.missingFiles;
+  // Unreadable files and a picture server without access: allowing it is the likely fix.
+  const offerAccess = !!missing && !!onGrantMedia && (mediaHosts?.length ?? 0) > 0;
   const hasActions = feedback.retry || feedback.retryWithoutFiles || missing || feedback.diagnostics;
   return (
     <div className={`note ${feedback.tone}`} role={feedback.tone === 'error' ? 'alert' : 'status'}>
@@ -1158,8 +1231,19 @@ function FeedbackNote({
           {missing.length > 3 ? ` and ${missing.length - 3} more` : ''}
         </p>
       )}
+      {offerAccess && (
+        <p className="note-body">
+          Firefox has not allowed ContextBridge to read pictures from {hostList(mediaHosts ?? [])}. Allow it and
+          the copy starts again.
+        </p>
+      )}
       {hasActions && (
         <div className="note-actions">
+          {offerAccess && (
+            <button type="button" className="btn small primary" onClick={onGrantMedia} disabled={locked}>
+              Allow pictures and copy
+            </button>
+          )}
           {missing && (
             <button type="button" className="btn small" onClick={onSkipMissing} disabled={locked}>
               {missing.length === 1 ? 'Skip missing file' : 'Skip missing files'}

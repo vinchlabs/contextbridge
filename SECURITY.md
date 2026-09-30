@@ -7,7 +7,7 @@ ContextBridge is engineered with a strict **Zero-Backend, Local-First** security
 - **No Remote Infrastructure:** There are no ContextBridge servers, databases, or API gateways.
 - **No Telemetry or Tracking:** Zero analytics SDKs, error trackers, tracking pixels, or remote telemetry.
 - **No Third-Party Transmission:** Conversation data, transcripts, and media are never transmitted over the network to any third party.
-- **Minimal Network Access:** Network requests (`fetch`) go only to the AI provider of the open chat and its file servers: the conversation's own pictures, videos and files, and for Claude the conversation itself through claude.ai's own API (same-origin, with the existing session). Cross-origin media the page cannot hand over (no CORS headers) is fetched by the background script, only for supported chat tabs, only `GET` on https URLs within the extension's host permissions (checked again after redirects), and at most 100 MB per file.
+- **Minimal Network Access:** Network requests (`fetch`) go only to the AI provider of the open chat and its file servers: the conversation's own pictures, videos and files, and for Claude the conversation itself through claude.ai's own API (same-origin, with the existing session). Cross-origin media the page cannot hand over (no CORS headers) is fetched by the background script, only for supported chat tabs, only `GET` on https URLs within the extension's host permissions (checked again after redirects), and at most 100 MB per file. If the extension's own request is refused (Firefox does not give it the page's Google session), the background has the chat page read the file itself: with the page's own `fetch()`, or for pictures by drawing them on a canvas. Same session, same CORS and CSP rules as the page's scripts, so it reads nothing the page could not. That path is limited to the host permissions, Google's image hosts (`lh3.google.com`, `*.ggpht.com`), the page's own origin and the page's own `blob:` URLs, with the final URL checked again.
 
 ---
 
@@ -74,10 +74,11 @@ ContextBridge requests only the minimum set of permissions necessary for local o
 | Permission | Purpose |
 | :--- | :--- |
 | `activeTab` | Allows the extension to interact with the currently focused AI provider tab when clicked. |
-| `scripting` | Enables content script execution for DOM crawling and handoff injection. |
+| `scripting` | Enables content script execution for DOM crawling and handoff injection, and small fixed functions in the chat page's MAIN world (ChatGPT file capture, reading a picture with the page's own session). |
 | `downloads` | Saves `.ctxbridge` archives and exported Markdown transcripts to the user's local Downloads folder. |
 | `storage` | Holds the copied chat between "Copy" and "Paste": in `storage.session` (memory only), or for chats above ~8 MB in `storage.local`, which is wiped on every browser start. **Clear** removes it at once. Also stores small UI preferences, the last handoff outcome and sanitized diagnostics. Passwords are never stored. |
 | `https://chatgpt.com/*`<br>`https://chat.openai.com/*`<br>`https://gemini.google.com/*`<br>`https://claude.ai/*` | Host permissions restricted specifically to the supported AI provider domains to fetch authenticated media and automate compose boxes. |
+| `https://*.googleusercontent.com/*`<br>`https://lh3.google.com/*`<br>`https://*.oaiusercontent.com/*`<br>`https://*.openai.com/*` | The servers the chats' pictures and files come from (Gemini, ChatGPT). Used only for `GET` requests for media the open chat shows. In Firefox, MV3 host permissions are opt-in: allowing a chat site does not allow these, so the popup asks for them ("Allow pictures") when they are missing. |
 
 *Note: ContextBridge does **not** request `<all_urls>` permission.*
 

@@ -13,6 +13,11 @@ export interface PlatformInfo {
   newChatUrl: string;
   /** Host permission patterns the content script needs. */
   origins: string[];
+  /**
+   * Host permission patterns of the servers the site's pictures and files come from. Without
+   * them Firefox lets the extension read nothing there (MV3 host permissions are opt-in).
+   */
+  mediaOrigins: string[];
   hosts: string[];
   /**
    * Most files the site takes in one message. Gemini documents 10 per prompt; ChatGPT is kept
@@ -29,6 +34,7 @@ export const PLATFORMS: readonly PlatformInfo[] = [
     name: 'ChatGPT',
     newChatUrl: 'https://chatgpt.com/',
     origins: ['https://chatgpt.com/*', 'https://chat.openai.com/*'],
+    mediaOrigins: ['https://*.oaiusercontent.com/*', 'https://*.openai.com/*'],
     hosts: ['chatgpt.com', 'chat.openai.com'],
     maxFilesPerMessage: 10,
     acceptsAudioVideo: false,
@@ -38,6 +44,7 @@ export const PLATFORMS: readonly PlatformInfo[] = [
     name: 'Claude',
     newChatUrl: 'https://claude.ai/new',
     origins: ['https://claude.ai/*'],
+    mediaOrigins: [],
     hosts: ['claude.ai'],
     maxFilesPerMessage: 20,
     acceptsAudioVideo: false,
@@ -47,6 +54,8 @@ export const PLATFORMS: readonly PlatformInfo[] = [
     name: 'Gemini',
     newChatUrl: 'https://gemini.google.com/app',
     origins: ['https://gemini.google.com/*'],
+    // Uploaded and generated pictures live on lh3.googleusercontent.com and can redirect to lh3.google.com.
+    mediaOrigins: ['https://*.googleusercontent.com/*', 'https://lh3.google.com/*'],
     hosts: ['gemini.google.com'],
     maxFilesPerMessage: 10,
     acceptsAudioVideo: true,

@@ -28,8 +28,9 @@ export default defineConfig({
       'https://*.oaiusercontent.com/*',
       'https://*.openai.com/*',
       'https://gemini.google.com/*',
-      // Gemini serves uploaded/generated images from googleusercontent.com
+      // Gemini serves uploaded/generated images from googleusercontent.com, some via lh3.google.com.
       'https://*.googleusercontent.com/*',
+      'https://lh3.google.com/*',
       'https://claude.ai/*',
     ],
     // libsodium (archive encryption) instantiates WebAssembly in the popup; Firefox MV3 extension
