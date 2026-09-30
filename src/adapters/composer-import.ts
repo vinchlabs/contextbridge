@@ -132,6 +132,39 @@ function selectAllInside(el: HTMLElement, doc: Document): void {
   selection.addRange(range);
 }
 
+/**
+ * ProseMirror editors (ChatGPT, Claude) read inserted newlines as spaces, so a multi-line prompt
+ * arrives as one paragraph. True when the first line of `text` still ends a line in the
+ * composer (or when there is nothing to judge).
+ */
+function lineBreaksKept(el: HTMLElement, text: string): boolean {
+  if (isTextArea(el)) return true;
+  const lines = text
+    .split(/\r?\n/)
+    .map((l) => l.replace(/\s+/g, ' ').trim())
+    .filter(Boolean);
+  if (lines.length < 2) return true;
+  const [first, second] = [lines[0]!, lines[1]!];
+  const have = readComposerText(el).replace(/[ \t\u00a0]+/g, ' ');
+  const at = have.indexOf(first);
+  if (at < 0) return true;
+  const next = have.indexOf(second, at + first.length);
+  if (next < 0) return true;
+  return have.slice(at + first.length, next).includes('\n');
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+/** One paragraph per line; the editor parses them without joining lines. */
+function paragraphsHtml(text: string): string {
+  return text
+    .split(/\r?\n/)
+    .map((line) => (line ? `<p>${escapeHtml(line)}</p>` : '<p><br></p>'))
+    .join('');
+}
+
 export async function insertTextIntoComposer(
   el: HTMLElement,
   text: string,
@@ -145,13 +178,30 @@ export async function insertTextIntoComposer(
 
   // 1. execCommand('insertText'): a real editing operation, so ProseMirror/Quill/React observe it
   //    exactly like typing (and, unlike a synthetic paste, ChatGPT/Claude do not convert a long
-  //    prompt into a "pasted text" attachment). Newlines are preserved as line breaks.
+  //    prompt into a "pasted text" attachment).
   try {
     if (typeof doc.execCommand === 'function') {
       selectAllInside(el, doc);
       if (doc.execCommand('insertText', false, text)) {
         await sleep(150);
-        if (composerContains(el, text)) return { ok: true, method: 'execCommand-insertText' };
+        if (composerContains(el, text)) {
+          if (lineBreaksKept(el, text)) return { ok: true, method: 'execCommand-insertText' };
+          // The editor joined the lines (code and Markdown would lose their shape): insert them
+          // as paragraphs. An editing command, not a paste, so no "pasted text" attachment and no
+          // Enter key that could send the message.
+          selectAllInside(el, doc);
+          if (doc.execCommand('insertHTML', false, paragraphsHtml(text))) {
+            await sleep(200);
+            if (composerContains(el, text) && lineBreaksKept(el, text)) return { ok: true, method: 'execCommand-insertHTML' };
+          }
+          // Joined text is still better than none.
+          if (!composerContains(el, text)) {
+            selectAllInside(el, doc);
+            doc.execCommand('insertText', false, text);
+            await sleep(150);
+          }
+          if (composerContains(el, text)) return { ok: true, method: 'execCommand-insertText-joined' };
+        }
       }
     }
   } catch {

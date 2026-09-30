@@ -8,6 +8,7 @@ import type { Message, StoredBlob } from '../model/canonical';
 import {
   attachmentFileName,
   baseMime,
+  isAudioVideo,
   isImageMime,
   isSendableDocument,
   isSendableImageMime,
@@ -64,13 +65,19 @@ function blobsByRecency(messages: Message[], blobs: Map<string, StoredBlob>): { 
   return { order, partNames };
 }
 
+export interface PlanOptions {
+  /** The target reads audio and video (Gemini). Default false. */
+  acceptsAudioVideo?: boolean;
+}
+
 /**
  * @param reservedNames names already used by the handoff itself (transcript.md).
  */
 export function planAttachments(
   messages: Message[],
   blobs: Map<string, StoredBlob>,
-  reservedNames: string[] = []
+  reservedNames: string[] = [],
+  opts: PlanOptions = {}
 ): AttachmentPlan {
   const taken = new Set(reservedNames.map((n) => n.toLowerCase()));
   const { order, partNames } = blobsByRecency(messages, blobs);
@@ -99,7 +106,11 @@ export function planAttachments(
     if (image) filename = withImageExtension(filename, mimeType);
     filename = uniqueName(filename, taken);
 
-    const sendable = !archive && (image ? isSendableImageMime(mimeType) : isSendableDocument(mimeType, filename));
+    const sendable =
+      !archive &&
+      (image
+        ? isSendableImageMime(mimeType)
+        : isSendableDocument(mimeType, filename) || (opts.acceptsAudioVideo === true && isAudioVideo(mimeType, filename)));
     names.set(sha, filename);
     entries.push({ sha256: sha, filename, mimeType, kind: image ? 'image' : 'file', sendable, archive, data: blob.data });
   }

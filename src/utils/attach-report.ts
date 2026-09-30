@@ -79,12 +79,12 @@ export function describeFiles(
   }
   const unsupported = extras.unsupportedFiles ?? [];
   if (unsupported.length > 0) {
-    lines.push(`Not attached, file type not supported: ${listNames(unsupported, maxNames)}.`);
+    lines.push(`Not attached, ${target} does not take these file types: ${listNames(unsupported, maxNames)}.`);
   }
   const archives = extras.archiveFiles ?? [];
   if (archives.length > 0) {
     lines.push(`Not attached: ${plural(archives.length, '.ctxbridge file')}. ContextBridge archives are never uploaded.`);
   }
-  if (manual.length > 0) lines.push(copiesHint(manual));
+  if (manual.length > 0 || unsupported.length > 0) lines.push(copiesHint([...manual, ...unsupported]));
   return lines;
 }

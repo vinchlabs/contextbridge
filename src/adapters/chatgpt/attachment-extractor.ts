@@ -8,6 +8,7 @@ import { ExtractedMediaReference } from './extractor';
 import { CaptureProgress } from '../adapter';
 import { CaptureIncompleteError } from '../../core/errors/errors';
 import { baseMime, isImageMime, sniffImageMime, withImageExtension } from '../../core/model/attachments';
+import { fetchMediaViaBackground, MediaTooLargeError, MEDIA_MAX_BYTES } from '../../utils/media-fetch';
 import { ownBytes } from '../../utils/wire-bytes';
 
 export async function resolveChatGPTMedia(
@@ -21,6 +22,8 @@ export async function resolveChatGPTMedia(
 ): Promise<Map<string, StoredBlob>> {
   const urlToShaMap = new Map<string, string>();
   let processed = 0;
+  // Every unreadable upload is named at once, so one "Skip missing files" covers them all.
+  const missingUploads: Array<{ name: string; url: string }> = [];
 
   for (const ref of mediaRefs) {
     if (signal?.aborted) break;
@@ -65,15 +68,7 @@ export async function resolveChatGPTMedia(
           });
           urlToShaMap.set(url, meta.sha256);
         } else if (!allowMissingUserUploads) {
-          throw new CaptureIncompleteError(
-            `Failed to capture user upload file bytes for ${ref.filename || url}`,
-            {
-              terminationReason: 'unresolved_user_attachment',
-              failedUrl: url,
-              filename: ref.filename,
-              missingFiles: [ref.filename || 'an uploaded image'],
-            }
-          );
+          missingUploads.push({ name: ref.filename || 'an uploaded image', url });
         }
       } else {
         // Non-user uploads (e.g. system or assistant assets): preserve fallback if provided
@@ -95,6 +90,19 @@ export async function resolveChatGPTMedia(
     }
 
     processed++;
+  }
+
+  if (missingUploads.length > 0 && !signal?.aborted) {
+    const first = missingUploads[0]!;
+    throw new CaptureIncompleteError(
+      `Failed to capture user upload file bytes for ${missingUploads.map((m) => m.name).join(', ')}`,
+      {
+        terminationReason: 'unresolved_user_attachment',
+        failedUrl: first.url,
+        filename: first.name,
+        missingFiles: missingUploads.map((m) => m.name),
+      }
+    );
   }
 
   // Update messages: replace placeholder URLs with resolved SHA-256 hashes
@@ -183,7 +191,14 @@ export async function fetchMediaBinary(
     }
   }
 
-  // 2. Handle HTTP / HTTPS / blob: URLs
+  // 3. Only real URLs can be fetched. Placeholders (gemini-file://, claude-file://) name a file
+  //    the page shows without giving a way to read it.
+  if (!/^(https?:|blob:)/i.test(url)) {
+    throw new Error(`No download URL for this file (${url.split(':')[0]})`);
+  }
+
+  // 4. HTTP / HTTPS / blob: URLs, directly from the content script.
+  let directError: unknown;
   try {
     // Session cookies only for the page's own origin: a credentialed cross-origin request fails
     // CORS against CDNs that answer `Access-Control-Allow-Origin: *` (signed URLs need no cookies).
@@ -200,44 +215,65 @@ export async function fetchMediaBinary(
     });
 
     if (response.ok) {
+      const declared = Number(response.headers.get('content-length'));
+      if (Number.isFinite(declared) && declared > MEDIA_MAX_BYTES) throw new MediaTooLargeError(declared);
       const mimeType = response.headers.get('content-type') || inferMimeFromUrl(url);
       const arrayBuffer = await response.arrayBuffer();
+      if (arrayBuffer.byteLength > MEDIA_MAX_BYTES) throw new MediaTooLargeError(arrayBuffer.byteLength);
       return {
         // In Firefox MV3 content scripts the response buffer belongs to the page realm.
         data: ownBytes(arrayBuffer),
         mimeType,
       };
     }
+    directError = new Error(`HTTP ${response.status} for ${url}`);
   } catch (fetchErr) {
-    // If fetch failed and we are in browser with DOM, try reading rendered image from DOM via canvas
-    if (typeof document !== 'undefined') {
-      const imgEl = document.querySelector(`img[src="${url}"]`) as HTMLImageElement | null;
-      if (imgEl && imgEl.complete && imgEl.naturalWidth > 0) {
-        try {
-          const canvas = document.createElement('canvas');
-          canvas.width = imgEl.naturalWidth;
-          canvas.height = imgEl.naturalHeight;
-          const ctx = canvas.getContext('2d');
-          if (ctx) {
-            ctx.drawImage(imgEl, 0, 0);
-            const dataUrl = canvas.toDataURL('image/png');
-            const comma = dataUrl.indexOf(',');
-            if (comma !== -1) {
-              const bin = atob(dataUrl.slice(comma + 1));
-              const bytes = new Uint8Array(bin.length);
-              for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-              return { data: bytes, mimeType: 'image/png' };
-            }
-          }
-        } catch {
-          // Canvas tainted or not allowed
-        }
-      }
-    }
-    throw fetchErr;
+    if (fetchErr instanceof MediaTooLargeError) throw fetchErr;
+    directError = fetchErr;
   }
 
-  throw new Error(`Failed to fetch media binary from ${url}`);
+  // 5. Cross-origin media without CORS headers (googleusercontent.com, oaiusercontent.com):
+  //    the background may read it, on the extension's host permissions only.
+  if (/^https:/i.test(url)) {
+    try {
+      const viaBackground = await fetchMediaViaBackground(url);
+      if (viaBackground) return viaBackground;
+    } catch (bgErr) {
+      if (bgErr instanceof MediaTooLargeError) throw bgErr;
+      // fall through to the rendered copy
+    }
+  }
+
+  // 6. A picture the page has already drawn: read it back through a canvas (fails when the
+  //    canvas is tainted by a cross-origin image).
+  if (typeof document !== 'undefined') {
+    const imgEl = Array.from(document.images || []).find(
+      (img) => img.currentSrc === url || img.getAttribute('src') === url
+    ) as HTMLImageElement | undefined;
+    if (imgEl && imgEl.complete && imgEl.naturalWidth > 0) {
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = imgEl.naturalWidth;
+        canvas.height = imgEl.naturalHeight;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(imgEl, 0, 0);
+          const dataUrl = canvas.toDataURL('image/png');
+          const comma = dataUrl.indexOf(',');
+          if (comma !== -1) {
+            const bin = atob(dataUrl.slice(comma + 1));
+            const bytes = new Uint8Array(bin.length);
+            for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+            return { data: bytes, mimeType: 'image/png' };
+          }
+        }
+      } catch {
+        // Canvas tainted or not allowed
+      }
+    }
+  }
+
+  throw directError instanceof Error ? directError : new Error(`Failed to fetch media binary from ${url}`);
 }
 
 export function inferMimeFromUrl(url: string): string {

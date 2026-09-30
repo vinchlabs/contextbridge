@@ -13,8 +13,11 @@ import {
   ConversationSnapshot,
   StoredBlob,
   ConversationMetadata,
+  Message,
   CANONICAL_SCHEMA_VERSION,
 } from '../../core/model/canonical';
+import { CaptureIncompleteError } from '../../core/errors/errors';
+import { captureClaudeViaApi } from './api-capture';
 import { PreparedHandoff, prepareHandoff } from '../../core/handoff/strategies';
 import { AdapterDiagnostics, sanitizeUrlForDiagnostics } from '../../core/diagnostics/diagnostics';
 import { BlobStore } from '../../core/hashing/sha256';
@@ -65,20 +68,45 @@ export class ClaudeAdapter implements ChatAdapter {
     });
 
     const meta = await this.getConversationMetadata(doc);
-    const crawlResult = await crawlClaudeConversation(doc, options, onProgress, signal);
-    // Cancelled, truncated or empty captures are errors, never a (partial) success.
-    assertSimpleCrawlComplete(crawlResult, signal, 'Claude');
-
-    const messages = crawlResult.results.map((r) => r.message);
-    const allMediaRefs = crawlResult.results.flatMap((r) => r.mediaRefs);
     const attachmentsExcluded = options.includeAttachments === false;
-
     const blobStore = new BlobStore();
-    if (!attachmentsExcluded && allMediaRefs.length > 0) {
-      await resolveChatGPTMedia(messages, allMediaRefs, blobStore, onProgress, signal, options.allowMissingFiles === true);
+
+    // 1. claude.ai's own conversation API: the whole conversation, Claude's replies and the
+    //    uploaded files included. Missing files are a real result (fail closed, like the page).
+    let messages: Message[] | null = null;
+    let title = meta.title;
+    try {
+      const api = await captureClaudeViaApi(
+        doc,
+        blobStore,
+        { includeAttachments: !attachmentsExcluded, allowMissingFiles: options.allowMissingFiles === true },
+        onProgress,
+        signal
+      );
+      if (api.messages.length > 0) {
+        messages = api.messages;
+        if (api.title) title = api.title;
+      }
+    } catch (err) {
+      if (err instanceof CaptureIncompleteError || signal?.aborted) throw err;
+      console.warn('[ContextBridge] Claude conversation API unavailable, reading the page instead:', err);
     }
-    // Remaining URL placeholders would fail archive validation and leak provider URLs.
-    markUnresolvedMediaParts(messages, (sha) => blobStore.has(sha), attachmentsExcluded ? 'excluded_by_user' : 'not_captured');
+
+    // 2. Fallback: the messages the page shows.
+    if (!messages) {
+      blobStore.clear();
+      const crawlResult = await crawlClaudeConversation(doc, options, onProgress, signal);
+      // Cancelled, truncated or empty captures are errors, never a (partial) success.
+      assertSimpleCrawlComplete(crawlResult, signal, 'Claude');
+
+      messages = crawlResult.results.map((r) => r.message);
+      const allMediaRefs = crawlResult.results.flatMap((r) => r.mediaRefs);
+      if (!attachmentsExcluded && allMediaRefs.length > 0) {
+        await resolveChatGPTMedia(messages, allMediaRefs, blobStore, onProgress, signal, options.allowMissingFiles === true);
+      }
+      // Remaining URL placeholders would fail archive validation and leak provider URLs.
+      markUnresolvedMediaParts(messages, (sha) => blobStore.has(sha), attachmentsExcluded ? 'excluded_by_user' : 'not_captured');
+    }
 
     onProgress?.({
       phase: 'finalizing',
@@ -94,7 +122,7 @@ export class ClaudeAdapter implements ChatAdapter {
       schemaVersion: CANONICAL_SCHEMA_VERSION,
       id: `claude-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       sourcePlatform: 'claude',
-      title: meta.title,
+      title,
       sourceUrl: pageUrl,
       capturedAt: new Date().toISOString(),
       messages,

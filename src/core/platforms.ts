@@ -19,6 +19,8 @@ export interface PlatformInfo {
    * at a conservative 10; Claude takes 20.
    */
   maxFilesPerMessage: number;
+  /** The site reads audio and video files (Gemini does; ChatGPT and Claude do not). */
+  acceptsAudioVideo: boolean;
 }
 
 export const PLATFORMS: readonly PlatformInfo[] = [
@@ -29,6 +31,7 @@ export const PLATFORMS: readonly PlatformInfo[] = [
     origins: ['https://chatgpt.com/*', 'https://chat.openai.com/*'],
     hosts: ['chatgpt.com', 'chat.openai.com'],
     maxFilesPerMessage: 10,
+    acceptsAudioVideo: false,
   },
   {
     id: 'claude',
@@ -37,6 +40,7 @@ export const PLATFORMS: readonly PlatformInfo[] = [
     origins: ['https://claude.ai/*'],
     hosts: ['claude.ai'],
     maxFilesPerMessage: 20,
+    acceptsAudioVideo: false,
   },
   {
     id: 'gemini',
@@ -45,6 +49,7 @@ export const PLATFORMS: readonly PlatformInfo[] = [
     origins: ['https://gemini.google.com/*'],
     hosts: ['gemini.google.com'],
     maxFilesPerMessage: 10,
+    acceptsAudioVideo: true,
   },
 ];
 

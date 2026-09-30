@@ -7,7 +7,7 @@ ContextBridge is engineered with a strict **Zero-Backend, Local-First** security
 - **No Remote Infrastructure:** There are no ContextBridge servers, databases, or API gateways.
 - **No Telemetry or Tracking:** Zero analytics SDKs, error trackers, tracking pixels, or remote telemetry.
 - **No Third-Party Transmission:** Conversation data, transcripts, and media are never transmitted over the network to any third party.
-- **Minimal Network Access:** Network requests (`fetch`) are strictly restricted to downloading user-visible media assets (images, attachments) from the authenticated origin of the currently open AI provider session (`chatgpt.com`, `gemini.google.com`, `claude.ai`).
+- **Minimal Network Access:** Network requests (`fetch`) go only to the AI provider of the open chat and its file servers: the conversation's own pictures, videos and files, and for Claude the conversation itself through claude.ai's own API (same-origin, with the existing session). Cross-origin media the page cannot hand over (no CORS headers) is fetched by the background script, only for supported chat tabs, only `GET` on https URLs within the extension's host permissions (checked again after redirects), and at most 100 MB per file.
 
 ---
 

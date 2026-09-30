@@ -6,6 +6,8 @@ import {
   type ContinueInTargetResponse,
   type DownloadArchiveMessage,
   type ExtensionMessage,
+  type FetchMediaMessage,
+  type FetchMediaResponse,
   type HandoffResultMessage,
   type LastHandoffResult,
   type ProbeInstallMainWorldMessage,
@@ -30,7 +32,8 @@ import {
   removePendingHandoff,
   setPendingHandoff,
 } from '../src/storage/pending-handoff-store';
-import { fromWireBytes } from '../src/utils/wire-bytes';
+import { fromWireBytes, toWireBytes } from '../src/utils/wire-bytes';
+import { isUrlOnHostPatterns, MEDIA_MAX_BYTES } from '../src/utils/media-fetch';
 import {
   installResourceCardProbeHooks,
   mainWorldProbeArgsList,
@@ -102,6 +105,12 @@ export default defineBackground(() => {
           .catch((err) => sendResponse({ ok: false, error: errorText(err) }));
         return true;
 
+      case 'FETCH_MEDIA':
+        handleFetchMedia(msg as FetchMediaMessage, from)
+          .then((res) => sendResponse(res))
+          .catch((err) => sendResponse({ ok: false, error: errorText(err) } satisfies FetchMediaResponse));
+        return true;
+
       default:
         return false;
     }
@@ -120,6 +129,35 @@ export default defineBackground(() => {
   // No tabs.onRemoved cleanup on purpose: it would wake this event page on every tab close in
   // the browser. Pending entries expire on their own (10 minutes) and tab ids are not reused.
 });
+
+/** https host patterns this extension may reach (MV3 host_permissions, MV2 permissions). */
+function hostPatterns(): string[] {
+  const manifest = browser.runtime.getManifest() as { host_permissions?: string[]; permissions?: string[] };
+  return [...(manifest.host_permissions ?? []), ...(manifest.permissions ?? [])].filter(
+    (p): p is string => typeof p === 'string' && p.startsWith('https://')
+  );
+}
+
+/**
+ * Media bytes for a URL a chat page shows, when the content script cannot read them itself
+ * (cross-origin without CORS). Only for supported chat tabs, only GET, only https URLs on this
+ * extension's host permissions (after redirects too), and never more than MEDIA_MAX_BYTES.
+ */
+async function handleFetchMedia(msg: FetchMediaMessage, sender: SenderLike): Promise<FetchMediaResponse> {
+  const fromChatTab = sender.tab?.id !== undefined && !!platformForUrl(sender.url);
+  if (!fromChatTab) return { ok: false, error: 'not_from_chat_tab' };
+  const patterns = hostPatterns();
+  if (typeof msg.url !== 'string' || !isUrlOnHostPatterns(msg.url, patterns)) return { ok: false, error: 'host_not_allowed' };
+
+  const response = await fetch(msg.url, { credentials: 'include', cache: 'no-store', redirect: 'follow' });
+  if (response.url && !isUrlOnHostPatterns(response.url, patterns)) return { ok: false, error: 'host_not_allowed' };
+  if (!response.ok) return { ok: false, status: response.status, error: 'http_error' };
+  const declared = Number(response.headers.get('content-length'));
+  if (Number.isFinite(declared) && declared > MEDIA_MAX_BYTES) return { ok: false, error: 'too_large' };
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  if (bytes.byteLength > MEDIA_MAX_BYTES) return { ok: false, error: 'too_large' };
+  return { ok: true, data: toWireBytes(bytes), mimeType: response.headers.get('content-type') || undefined };
+}
 
 /** Content script -> tray. Accepts only captures sent from a supported chat tab. */
 function handleTraySavePort(port: ReturnType<typeof browser.runtime.connect>): void {

@@ -10,9 +10,14 @@ export const CLAUDE_SELECTORS = {
   ],
 
   TURNS: {
-    USER: '[data-testid="user-message"], div[class*="font-user-message"], div[class*="user-message"]',
-    ASSISTANT: 'div[class*="font-claude-message"], [data-testid*="claude-message"], div[class*="claude-message"]',
-    COMBINED: '[data-testid="user-message"], div[class*="font-claude-message"], div[class*="user-message"], div[class*="claude-message"]',
+    USER: '[data-testid="user-message"], div[class*="font-user-message"]',
+    // Replies: .font-claude-response (2025+) inside [data-is-streaming]; older builds used
+    // .font-claude-message.
+    ASSISTANT: '.font-claude-response, [data-is-streaming], div[class*="font-claude-message"], [data-testid*="claude-message"]',
+    // One wrapper per message when present ([data-test-render-count]), so pictures and files
+    // shown next to the bubble belong to the message; otherwise the bubbles themselves.
+    COMBINED:
+      '[data-test-render-count], [data-testid="user-message"], div[class*="font-user-message"], .font-claude-response, [data-is-streaming], div[class*="font-claude-message"], [data-testid*="claude-message"]',
   },
 
   CONTENT: {

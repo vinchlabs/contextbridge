@@ -29,7 +29,8 @@ export type MessageType =
   | 'CLAIM_PENDING_HANDOFF'
   | 'HANDOFF_RESULT'
   | 'DOWNLOAD_ARCHIVE'
-  | 'PROBE_INSTALL_MAIN_WORLD';
+  | 'PROBE_INSTALL_MAIN_WORLD'
+  | 'FETCH_MEDIA';
 
 /**
  * Content script -> background port that carries a finished capture into the tray. A port
@@ -219,7 +220,26 @@ export interface ProbeInstallMainWorldMessage extends BaseMessage {
   args: MainWorldProbeInstallArgs | FileCaptureInstallArgs;
 }
 
+/**
+ * Content script -> background: read a picture, video or file the chat page shows but the
+ * content script may not fetch itself (cross-origin, no CORS headers). The background only
+ * fetches https URLs on the extension's own host permissions.
+ */
+export interface FetchMediaMessage extends BaseMessage {
+  type: 'FETCH_MEDIA';
+  url: string;
+}
+
+export interface FetchMediaResponse {
+  ok: boolean;
+  data?: WireBytes;
+  mimeType?: string;
+  status?: number;
+  error?: string;
+}
+
 export type ExtensionMessage =
+  | FetchMediaMessage
   | PingMessage
   | GetPageStatusMessage
   | PageStatusResponse

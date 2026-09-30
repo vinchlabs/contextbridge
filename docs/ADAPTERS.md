@@ -77,11 +77,15 @@ ContextBridge solves this using a pass-aware virtual crawler:
 
 ## 4. Attachment & Media Resolution
 
-1. Message extractors flag media URLs (`https://...`, `blob:...`, `data:...`).
-2. The attachment extractor fetches the binary payload with `credentials: 'include'` to utilize active authenticated browser session cookies.
+1. Message extractors flag media URLs (`https://...`, `blob:...`, `data:...`) for pictures, videos and audio.
+2. The attachment extractor fetches the bytes from the content script (session cookies for the page's own origin). Cross-origin media without CORS headers (Gemini's `googleusercontent.com`) is fetched by the background instead (`FETCH_MEDIA`): only for supported chat tabs, only `GET` on https URLs covered by the extension's host permissions (after redirects too), at most 100 MB. A picture the page already shows is read back through a canvas as a last resort.
 3. Content is stored in a `BlobStore` that hashes the payload via SHA-256:
    - If two messages reference the exact same image or file, it is deduplicated and stored once.
-4. Message content references replace temporary URLs with the permanent `blobSha256` identity.
+4. Message content references replace temporary URLs with the permanent `blobSha256` identity. Every upload that stays unreadable is named in one error, so a single **Skip missing file** covers them all.
+
+**Claude** is read through claude.ai's own conversation API, the one its web app uses: `GET /api/organizations/{org}/chat_conversations/{id}?tree=True&rendering_mode=messages&render_all_tools=true` returns every message of the visible branch (Claude's replies and artifacts included), the files of each message (bytes from `/api/organizations/{org}/files/{uuid}/contents`, then `/preview`, then `/thumbnail`) and the text of pasted or extracted documents. Requests are same-origin with the session; thinking blocks and tool results are not copied. When the API is unavailable, the adapter reads the page (`.font-claude-response`, `[data-is-streaming]`, `[data-testid="user-message"]`).
+
+**Gemini** has no message API, so turns are read from the page in document order (`src/adapters/content-walker.ts`), skipping Gemini's chrome ("You said" labels, "Show thinking", sources, action bars). The prompt text comes only from `.query-text`. Uploaded files appear as chips ("CSV" and a name) without a download link in the page; they become named file references that the capture reports as unreadable, and after **Skip missing file** as "not included" markers. Generated videos are captured as files.
 
 **ChatGPT uploaded-file cards** have no URL in the DOM. `file-card-resolver.ts` clicks each card while MAIN-world hooks (`file-capture-main-world.ts`) watch ChatGPT's own chain: `files/{id}/simple` → `files/download/{id}` → `download_url` (estuary). The bytes the page fetches are cloned; otherwise the exact `download_url` is fetched.
 

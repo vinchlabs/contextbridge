@@ -124,7 +124,9 @@ export function buildHandoff(
   const includeMedia = limits.includeMediaFiles !== false;
 
   // 1. File names first: the text refers to files by the names they are attached under.
-  const plan = planAttachments(sorted.messages, blobs, ['transcript.md']);
+  const plan = planAttachments(sorted.messages, blobs, ['transcript.md'], {
+    acceptsAudioVideo: platformInfo(targetPlatform)?.acceptsAudioVideo === true,
+  });
   const sizingRefs: AttachmentRefs = { names: plan.names };
 
   // 2. Determine active window

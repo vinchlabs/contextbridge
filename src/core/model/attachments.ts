@@ -73,6 +73,24 @@ const EXTENSION_BY_MIME: Record<string, string> = {
   'application/vnd.oasis.opendocument.text': 'odt',
   'application/vnd.oasis.opendocument.spreadsheet': 'ods',
   'application/vnd.oasis.opendocument.presentation': 'odp',
+  'application/zip': 'zip',
+  'audio/mpeg': 'mp3',
+  'audio/mp3': 'mp3',
+  'audio/wav': 'wav',
+  'audio/x-wav': 'wav',
+  'audio/mp4': 'm4a',
+  'audio/aac': 'aac',
+  'audio/flac': 'flac',
+  'audio/ogg': 'ogg',
+  'audio/opus': 'opus',
+  'audio/webm': 'weba',
+  'video/mp4': 'mp4',
+  'video/quicktime': 'mov',
+  'video/webm': 'webm',
+  'video/x-matroska': 'mkv',
+  'video/x-msvideo': 'avi',
+  'video/mpeg': 'mpeg',
+  'video/3gpp': '3gp',
 };
 
 const MIME_BY_EXTENSION: Record<string, string> = {
@@ -111,7 +129,49 @@ const MIME_BY_EXTENSION: Record<string, string> = {
   odt: 'application/vnd.oasis.opendocument.text',
   ods: 'application/vnd.oasis.opendocument.spreadsheet',
   odp: 'application/vnd.oasis.opendocument.presentation',
+  zip: 'application/zip',
+  mp3: 'audio/mpeg',
+  wav: 'audio/wav',
+  m4a: 'audio/mp4',
+  aac: 'audio/aac',
+  flac: 'audio/flac',
+  ogg: 'audio/ogg',
+  oga: 'audio/ogg',
+  opus: 'audio/opus',
+  aiff: 'audio/aiff',
+  mp4: 'video/mp4',
+  m4v: 'video/mp4',
+  mov: 'video/quicktime',
+  webm: 'video/webm',
+  mkv: 'video/x-matroska',
+  avi: 'video/x-msvideo',
+  mpeg: 'video/mpeg',
+  mpg: 'video/mpeg',
+  wmv: 'video/x-ms-wmv',
+  flv: 'video/x-flv',
+  '3gp': 'video/3gpp',
 };
+
+export function isAudioMime(mime: string | undefined): boolean {
+  return /^audio\//i.test(baseMime(mime));
+}
+
+export function isVideoMime(mime: string | undefined): boolean {
+  return /^video\//i.test(baseMime(mime));
+}
+
+/** Audio or video, by type or (for octet-stream blobs) by extension. */
+export function isAudioVideo(mime: string | undefined, name: string | undefined): boolean {
+  if (isAudioMime(mime) || isVideoMime(mime)) return true;
+  const byName = mimeForFilename(name);
+  return isAudioMime(byName) || isVideoMime(byName);
+}
+
+/** A name with an extension ContextBridge knows (documents, code, media, archives). */
+export function hasKnownFileExtension(name: string | undefined): boolean {
+  const ext = fileExtension(name);
+  return !!ext && (!!MIME_BY_EXTENSION[ext] || CODE_EXTENSIONS.has(ext));
+}
 
 /** Plain-text source and config files: the chat sites read them as text. */
 const CODE_EXTENSIONS = new Set([
@@ -160,8 +220,14 @@ export function isSendableDocument(mime: string | undefined, name: string | unde
   if (m === 'application/epub+zip' || m === 'application/x-ipynb+json' || m === 'image/svg+xml') return true;
   const ext = fileExtension(name);
   if (!ext) return false;
-  return (!!MIME_BY_EXTENSION[ext] && !IMAGE_EXTENSIONS.has(ext)) || CODE_EXTENSIONS.has(ext) || ext === 'svg';
+  return DOCUMENT_EXTENSIONS.has(ext) || CODE_EXTENSIONS.has(ext);
 }
+
+/** Documents by extension (octet-stream blobs); media and archives are not documents. */
+const DOCUMENT_EXTENSIONS = new Set([
+  'pdf', 'txt', 'text', 'log', 'md', 'markdown', 'csv', 'tsv', 'html', 'htm', 'css', 'xml', 'json', 'ipynb',
+  'rtf', 'epub', 'doc', 'xls', 'ppt', 'docx', 'xlsx', 'pptx', 'odt', 'ods', 'odp', 'svg',
+]);
 
 /** Makes an image's extension match its real type ("photo.png" holding JPEG bytes -> "photo.jpg"). */
 export function withImageExtension(name: string, mime: string | undefined): string {

@@ -68,7 +68,7 @@ chat page ──► adapter (crawler + extractor) ──► canonical snapshot +
 target page ◄── composer importer ◄── handoff (prompt, transcript.md, attachment plan)
 ```
 
-- **Adapters** (`src/adapters/<site>/`) read one site: the crawler walks the virtualized history, and the extractor turns each turn into canonical messages. ChatGPT's uploaded-file cards are read by replaying ChatGPT's own download requests.
+- **Adapters** (`src/adapters/<site>/`) read one site. ChatGPT and Gemini are read from the page: the crawler walks the virtualized history, and the extractor turns each turn into canonical messages in document order. ChatGPT's uploaded-file cards are read by replaying ChatGPT's own download requests. Claude is read through claude.ai's own conversation API, with the page as a fallback.
 - **Core** (`src/core/`) is independent of the sites. It holds the canonical model, SHA-256 blob store, `.ctxbridge` reader and writer, compression, encryption, and the handoff builder.
 - **The composer importer** (`src/adapters/composer-import.ts`) inserts the draft in a way ProseMirror and Quill editors register. It then offers the files through the page's upload input, a paste, or a drop, and checks that the page shows them.
 
@@ -103,6 +103,8 @@ docs/          architecture, adapters, archive format, manual tests
 ## Limitations
 
 - Sites can refuse files that a script hands over. When that happens, the notice lists the files so you can attach them yourself. **Save files** gives you copies under the same names.
+- Gemini shows files you uploaded (CSV, PDF and so on) only as chips, without their contents. ContextBridge copies their names and marks them as not included; attach the originals yourself. Pictures and generated videos are copied.
+- Only Gemini takes audio and video. When pasting into ChatGPT or Claude, those files are listed instead of attached.
 - A model only sees what fits in its context window. Long chats rely on the model reading `transcript.md`.
 - Hidden provider state is not visible in the page, so it cannot be copied. That includes system prompts, memory and hidden reasoning.
 - Firefox only for now.
