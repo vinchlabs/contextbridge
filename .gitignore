@@ -1,0 +1,29 @@
+# Dependencies and build output
+node_modules/
+.output/
+.wxt/
+dist/
+coverage/
+web-ext-artifacts/
+*.zip
+*.xpi
+
+# Local data: never commit copied chats, exports or diagnostics
+*.ctxbridge
+*-transcript.md
+diagnostics*.json
+*.log
+
+# Secrets and local settings
+.env
+.env.*
+*.pem
+*.key
+
+# Editor, OS and assistant files
+.vscode/
+.idea/
+.kiro/
+.kiro-tmp/
+.DS_Store
+Thumbs.db

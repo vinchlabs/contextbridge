@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Optimizing Redis Cache - ChatGPT</title>
+</head>
+<body>
+  <nav>
+    <a href="#" class="active">Weekend Trip Ideas</a>
+  </nav>
+  <header>
+    <h1>Optimizing Redis Cache</h1>
+  </header>
+  <main class="relative h-full w-full flex-1 overflow-auto transition-width" style="overflow-y: auto; height: 800px;">
+    <div data-virtualized-turn-content class="react-scroll-to-bottom--css-jfehi-7909nd h-full">
+      <div class="flex flex-col text-sm md:pb-9">
+
+        <!-- Turn 1: User with text and uploaded PNG screenshot -->
+        <div data-turn-key="turn-uuid-1">
+          <div data-content-search-turn-key="fallback-turn-0">
+            <div
+              data-content-search-unit-key="fallback-turn-0:0:user"
+              data-chatgpt-search-unit-key="fallback-turn-0:0:user"
+              data-chatgpt-search-message-ids="msg-user-1"
+            >
+              <div
+                data-chatgpt-selection-conversation-id="test-conv-uuid"
+                data-chatgpt-selection-message-id="msg-user-1"
+              >
+                <!-- Uploaded PNG attachment card -->
+                <div data-testid="file-attachment" class="relative overflow-hidden rounded-2xl border border-token-border-light">
+                  <picture>
+                    <source srcset="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==" />
+                    <img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==" alt="architecture-diagram.png" />
+                  </picture>
+                </div>
+                <p>How do I configure Redis connection pooling in Python? Here is my current architecture diagram above.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Turn 2: Assistant with text -> code -> text -> code -> text order -->
+        <div data-turn-key="turn-uuid-2">
+          <div data-content-search-turn-key="fallback-turn-1">
+            <div
+              data-content-search-unit-key="fallback-turn-1:2:assistant"
+              data-chatgpt-search-unit-key="fallback-turn-1:2:assistant"
+              data-chatgpt-search-message-ids="msg-asst-1"
+            >
+              <div
+                data-chatgpt-selection-conversation-id="test-conv-uuid"
+                data-chatgpt-selection-message-id="msg-asst-1"
+              >
+                <div data-markdown-text-style="assistant-message">
+                  <p>Run this command first:</p>
+                </div>
+                <div class="code-block-wrapper">
+                  <pre><code class="language-bash">pip install redis</code></pre>
+                </div>
+                <div data-markdown-text-style="assistant-message">
+                  <p>then configure the connection pool in your application:</p>
+                </div>
+                <div class="code-block-wrapper">
+                  <pre><code class="language-python">import redis
+
+pool = redis.ConnectionPool(host='localhost', port=6379, db=0, max_connections=20)
+r = redis.Redis(connection_pool=pool)
+r.set('cache_key', 'cached_value', ex=3600)</code></pre>
+                </div>
+                <div data-markdown-text-style="assistant-message">
+                  <p>and this is how you verify the connection:</p>
+                </div>
+                <div class="code-block-wrapper">
+                  <pre><code class="language-python">print(r.ping())</code></pre>
+                </div>
+                <div data-markdown-text-style="assistant-message">
+                  <p>Everything should now run cleanly with automatic connection pooling.</p>
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Strategy</th>
+                        <th>Max Connections</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td>Single Shared Pool</td>
+                        <td>20</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </main>
+
+  <!-- Compose Box -->
+  <div class="composer-container">
+    <textarea id="prompt-textarea" placeholder="Message ChatGPT..."></textarea>
+    <input type="file" multiple style="display:none" />
+    <button data-testid="send-button" aria-label="Send prompt">Send</button>
+  </div>
+</body>
+</html>

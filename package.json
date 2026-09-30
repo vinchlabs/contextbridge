@@ -1,0 +1,42 @@
+{
+  "name": "contextbridge",
+  "version": "1.0.0",
+  "description": "Local-first conversation handoff between AI chat applications",
+  "license": "Apache-2.0",
+  "author": "vinchlabs",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vinchlabs/contextbridge.git"
+  },
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "postinstall": "wxt prepare",
+    "dev:firefox": "wxt -b firefox",
+    "build:firefox": "wxt build -b firefox",
+    "zip:firefox": "wxt zip -b firefox",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src entrypoints",
+    "format": "prettier --write \"src/**/*.{ts,tsx}\" \"entrypoints/**/*.{ts,tsx,html,css}\""
+  },
+  "dependencies": {
+    "cborg": "^6.1.2",
+    "libsodium-wrappers-sumo": "^0.8.4",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.3",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@wxt-dev/module-react": "^1.2.2",
+    "eslint": "^10.11.0",
+    "happy-dom": "^20.14.5",
+    "prettier": "^3.9.9",
+    "typescript": "^5.7.3",
+    "typescript-eslint": "^8.70.1",
+    "vitest": "^5.0.2",
+    "wxt": "^0.21.4"
+  }
+}

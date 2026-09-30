@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Database Indexing Guide - Gemini</title>
+</head>
+<body>
+  <div class="chat-history">
+    <infinite-scroller class="chat-container">
+
+      <!-- Gemini User Query -->
+      <user-query id="gemini-turn-1" class="user-query-container">
+        <div class="message-content">
+          <p>Explain B-Tree index structure in PostgreSQL and when to use GIN indexes instead.</p>
+          <img src="https://gemini.google.com/uploads/query-schema.png" alt="Schema Overview" />
+        </div>
+      </user-query>
+
+      <!-- Gemini Model Response -->
+      <model-response id="gemini-turn-2" class="model-response-container">
+        <div class="message-content">
+          <p>B-Tree indexes are the default index type in PostgreSQL, ideal for comparisons using operators like <code>&lt;</code>, <code>=</code>, and <code>&gt;</code>.</p>
+          <div class="code-block" language="sql">
+            <code>CREATE INDEX idx_users_email ON users USING btree (email);
+CREATE INDEX idx_documents_tags ON documents USING gin (tags);
+</code>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th>Index Type</th>
+                <th>Best For</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>B-Tree</td>
+                <td>Scalar equality and range queries</td>
+              </tr>
+              <tr>
+                <td>GIN</td>
+                <td>Arrays, full-text search, and JSONB</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </model-response>
+
+    </infinite-scroller>
+  </div>
+
+  <!-- Compose Box -->
+  <rich-textarea>
+    <div contenteditable="true" role="textbox" aria-label="Enter a prompt here"></div>
+    <input type="file" multiple />
+  </rich-textarea>
+</body>
+</html>

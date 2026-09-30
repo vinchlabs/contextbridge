@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>React Performance Optimization - Claude</title>
+</head>
+<body>
+  <main class="flex-1 overflow-y-auto">
+    <div class="conversation-turns">
+
+      <!-- Claude User Message -->
+      <div data-testid="user-message" class="font-user-message">
+        <div class="prose">
+          <p>How can I eliminate unnecessary re-renders in React 19? Here is my component code:</p>
+        </div>
+        <div data-testid="attachment-item">
+          <a href="https://claude.ai/attachments/SlowComponent.tsx">SlowComponent.tsx</a>
+        </div>
+      </div>
+
+      <!-- Claude Assistant Message -->
+      <div class="font-claude-message" data-testid="claude-message-1">
+        <div class="prose">
+          <p>In React 19, the React Compiler automatically memoizes components, but manual optimization is still helpful for complex calculations:</p>
+          <pre><code class="language-typescript">import { useMemo, useCallback } from 'react';
+
+export function OptimizedList({ items, onSelect }: { items: string[]; onSelect: (item: string) => void }) {
+  const filtered = useMemo(() => items.filter(Boolean), [items]);
+  const handleSelect = useCallback((item: string) => onSelect(item), [onSelect]);
+
+  return (
+    &lt;ul&gt;
+      {filtered.map((item) => (
+        &lt;li key={item} onClick={() =&gt; handleSelect(item)}&gt;{item}&lt;/li&gt;
+      ))}
+    &lt;/ul&gt;
+  );
+}
+</code></pre>
+          <table>
+            <thead>
+              <tr>
+                <th>Hook</th>
+                <th>Use Case</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>useMemo</td>
+                <td>Expensive computations</td>
+              </tr>
+              <tr>
+                <td>useCallback</td>
+                <td>Stable callback references</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+    </div>
+  </main>
+
+  <!-- Claude Compose Box -->
+  <div class="composer">
+    <div contenteditable="true" role="textbox"></div>
+    <input type="file" multiple />
+  </div>
+</body>
+</html>
